@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Event Leaderboard</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="js/firebase-config.js"></script>
+  <script src="js/shared.js"></script>
+</head>
+<body>
+  <div class="stars-bg"></div>
+
+  <div class="page">
+    <div class="lb-header">
+      <a href="index.html" class="btn btn-ghost" style="padding: 8px 14px;">← Back</a>
+      <h1>Leaderboard</h1>
+      <span id="lbModeBadge" class="lb-mode-badge local">Local Mode</span>
+    </div>
+
+    <div id="lbContainer">
+      <div class="lb-loading">Loading standings...</div>
+    </div>
+
+    <div class="mt-4" style="text-align: center;">
+      <a href="index.html" class="btn btn-primary btn-full">Play Games</a>
+    </div>
+  </div>
+
+  <script>
+    const lbContainer = document.getElementById('lbContainer');
+    const lbModeBadge = document.getElementById('lbModeBadge');
+    const currentPlayer = SharedGame.getPlayer();
+
+    SharedGame.onLeaderboardUpdate((players, isLive) => {
+      lbModeBadge.textContent = isLive ? 'Live Sync' : 'Device Only';
+      lbModeBadge.className = 'lb-mode-badge ' + (isLive ? 'live' : 'local');
+
+      if (!players || players.length === 0) {
+        lbContainer.innerHTML = '<div class="lb-empty">No scores yet! Play a game to get on the board.</div>';
+        return;
+      }
+
+      let html = '';
+      players.forEach((p, idx) => {
+        const rank = idx + 1;
+        const topClass = rank === 1 ? 'top-1' : rank === 2 ? 'top-2' : rank === 3 ? 'top-3' : '';
+        const meClass = currentPlayer && p.id === currentPlayer.id ? 'is-me' : '';
+        const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '#' + rank;
+
+        const scores = p.scores || {};
+        const chips = SharedGame.GAME_IDS.map(gid => {
+          const s = scores[gid] || 0;
+          const info = SharedGame.GAME_INFO[gid];
+          return `<span class="lb-chip">${info.emoji} ${s}</span>`;
+        }).join('');
+
+        html += `
+          <div class="lb-row ${topClass} ${meClass}">
+            <div class="lb-rank">${medal}</div>
+            <div class="lb-name">
+              <div>${p.name || 'Anonymous'}</div>
+              <div class="lb-game-scores">${chips}</div>
+            </div>
+            <div class="lb-score">${p.total || 0}</div>
+          </div>
+        `;
+      });
+
+      lbContainer.innerHTML = html;
+    });
+  </script>
+</body>
+</html>

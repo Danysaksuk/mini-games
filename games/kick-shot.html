@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Kick Shot</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="../js/firebase-config.js"></script>
+  <script src="../js/shared.js"></script>
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; background: #0d0d1a; }
+    canvas { display: block; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <div class="game-hud">
+    <button class="hud-back" onclick="SharedGame.goHome()">← Hub</button>
+    <div class="hud-score-block">
+      <div id="hudScore" class="hud-score">0</div>
+      <div class="hud-label">Goals Scored</div>
+    </div>
+    <div class="hud-right" style="text-align: right;">
+      <div id="hudShots" style="font-size: 1.1rem; letter-spacing: 2px;">⚽⚽⚽⚽⚽</div>
+      <div class="hud-label">Shots Left</div>
+    </div>
+  </div>
+
+  <div id="startOverlay" class="start-overlay">
+    <div class="start-box">
+      <span class="game-emoji">⚽</span>
+      <h1>Kick Shot</h1>
+      <p class="instructions">Swipe upward from the ball to shoot! Curve your shot to beat the goalkeeper. 5 penalty shots per round.</p>
+      <div class="best">⭐ Personal Best: <span id="startBest">0</span></div>
+      <button id="startBtn" class="btn btn-primary btn-lg btn-full" style="background: linear-gradient(135deg, #6bcb77, #3fad4b);">TAKE THE SHOT</button>
+    </div>
+  </div>
+
+  <div id="gameoverOverlay" class="gameover-overlay hidden">
+    <div class="gameover-box">
+      <span class="result-emoji" id="goEmoji">🏆</span>
+      <h2 id="goTitle">Full Time!</h2>
+      <div id="goNewHigh" class="new-high-badge hidden">🎉 NEW HIGH SCORE!</div>
+      <div id="goScore" class="score-big">0</div>
+      <div class="score-label">Goals Scored (Out of 5)</div>
+      <div class="gameover-actions">
+        <button id="restartBtn" class="btn btn-green btn-full">Shoot Again</button>
+        <button class="btn btn-ghost btn-full" onclick="SharedGame.goHome()">Back to Arcade</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const player = SharedGame.guardPlayer();
+
+    const GAME_W = Math.min(window.innerWidth, 480);
+    const GAME_H = window.innerHeight;
+
+    let high = SharedGame.getHighScore('kick-shot');
+    document.getElementById('startBest').textContent = high;
+
+    const audioCtx = (window.AudioContext || window.webkitAudioContext) ? new (window.AudioContext || window.webkitAudioContext)() : null;
+    function playBeep(freq, type = 'sine', duration = 0.08) {
+      if (!audioCtx) return;
+      try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.14, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch(e) {}
+    }
+
+    class KickScene extends Phaser.Scene {
+      constructor() {
+        super('KickScene');
+      }
+
+      create() {
+        this.gameState = 'ready';
+        this.shotsRemaining = 5;
+        this.score = 0;
+
+        // Field background
+        const bg = this.add.graphics();
+        // Pitch green gradient
+        bg.fillGradientStyle(0x1b5e20, 0x1b5e20, 0x2e7d32, 0x388e3c, 1);
+        bg.fillRect(0, 0, GAME_W, GAME_H);
+
+        // Field markings
+        const lines = this.add.graphics();
+        lines.lineStyle(3, 0xffffff, 0.4);
+        // Penalty box
+        lines.strokeRect(GAME_W * 0.12, GAME_H * 0.14, GAME_W * 0.76, GAME_H * 0.28);
+        // Goal box
+        lines.strokeRect(GAME_W * 0.24, GAME_H * 0.14, GAME_W * 0.52, GAME_H * 0.12);
+        // Penalty spot
+        lines.fillStyle(0xffffff, 0.6);
+        lines.fillCircle(GAME_W / 2, GAME_H * 0.34, 4);
+
+        // Goal definition
+        this.goalPostLeft = GAME_W * 0.2;
+        this.goalPostRight = GAME_W * 0.8;
+        this.goalCrossbarY = GAME_H * 0.14;
+        this.goalNetDepth = 35;
+
+        // Draw Goal
+        this.goalGfx = this.add.graphics();
+        this.drawGoal();
+
+        // Keeper definition
+        this.keeperX = GAME_W / 2;
+        this.keeperY = this.goalCrossbarY + 22;
+        this.keeperW = 44;
+        this.keeperH = 26;
+        this.keeperSpeed = 160;
+        this.keeperDir = 1;
+        this.keeperGfx = this.add.graphics();
+        this.drawKeeper();
+
+        // Ball definition
+        this.ballRadius = 14;
+        this.ballSpawnX = GAME_W / 2;
+        this.ballSpawnY = GAME_H * 0.78;
+        this.ballX = this.ballSpawnX;
+        this.ballY = this.ballSpawnY;
+        this.ballScale = 1;
+        this.ballState = 'idle'; // idle, shot, scored, saved, missed
+        this.ballVX = 0;
+        this.ballVY = 0;
+        this.ballSpin = 0;
+
+        this.ballGfx = this.add.graphics();
+        this.drawBall();
+
+        // Feedback text
+        this.feedbackText = this.add.text(GAME_W / 2, GAME_H * 0.42, '', {
+          fontFamily: 'Fredoka One',
+          fontSize: '36px',
+          color: '#ffd93d'
+        }).setOrigin(0.5).setAlpha(0);
+
+        // Swipe handling
+        this.touchStartX = 0;
+        this.touchStartY = 0;
+        this.touchStartTime = 0;
+        this.swiping = false;
+
+        this.input.on('pointerdown', (pointer) => {
+          if (this.gameState !== 'playing' || this.ballState !== 'idle') return;
+          const dist = Phaser.Math.Distance.Between(pointer.x, pointer.y, this.ballX, this.ballY);
+          if (dist < 80) {
+            this.touchStartX = pointer.x;
+            this.touchStartY = pointer.y;
+            this.touchStartTime = this.time.now;
+            this.swiping = true;
+          }
+        });
+
+        this.input.on('pointerup', (pointer) => {
+          if (!this.swiping) return;
+          this.swiping = false;
+
+          const dx = pointer.x - this.touchStartX;
+          const dy = pointer.y - this.touchStartY;
+          const dt = Math.max(1, this.time.now - this.touchStartTime);
+
+          if (dy < -25) {
+            const speed = Math.min(1000, (-dy / dt) * 1200);
+            this.shoot(dx * 1.5, -speed);
+          }
+        });
+      }
+
+      drawGoal() {
+        this.goalGfx.clear();
+        // Net grid
+        this.goalGfx.lineStyle(1, 0xffffff, 0.25);
+        for (let x = this.goalPostLeft; x <= this.goalPostRight; x += 12) {
+          this.goalGfx.beginPath();
+          this.goalGfx.moveTo(x, this.goalCrossbarY);
+          this.goalGfx.lineTo(x, this.goalCrossbarY - this.goalNetDepth);
+          this.goalGfx.strokePath();
+        }
+        for (let y = this.goalCrossbarY - this.goalNetDepth; y <= this.goalCrossbarY; y += 10) {
+          this.goalGfx.beginPath();
+          this.goalGfx.moveTo(this.goalPostLeft, y);
+          this.goalGfx.lineTo(this.goalPostRight, y);
+          this.goalGfx.strokePath();
+        }
+
+        // Posts and crossbar
+        this.goalGfx.lineStyle(6, 0xffffff, 1);
+        // Crossbar
+        this.goalGfx.beginPath();
+        this.goalGfx.moveTo(this.goalPostLeft, this.goalCrossbarY);
+        this.goalGfx.lineTo(this.goalPostRight, this.goalCrossbarY);
+        this.goalGfx.strokePath();
+
+        // Left & Right posts
+        this.goalGfx.beginPath();
+        this.goalGfx.moveTo(this.goalPostLeft, this.goalCrossbarY);
+        this.goalGfx.lineTo(this.goalPostLeft, this.goalCrossbarY + 40);
+        this.goalGfx.strokePath();
+
+        this.goalGfx.beginPath();
+        this.goalGfx.moveTo(this.goalPostRight, this.goalCrossbarY);
+        this.goalGfx.lineTo(this.goalPostRight, this.goalCrossbarY + 40);
+        this.goalGfx.strokePath();
+      }
+
+      drawKeeper() {
+        this.keeperGfx.clear();
+        this.keeperGfx.x = this.keeperX;
+        this.keeperGfx.y = this.keeperY;
+
+        // Jersey
+        this.keeperGfx.fillStyle(0xffd54f, 1);
+        this.keeperGfx.fillRoundedRect(-this.keeperW / 2, -this.keeperH / 2, this.keeperW, this.keeperH, 6);
+
+        // Gloves
+        this.keeperGfx.fillStyle(0xff5722, 1);
+        this.keeperGfx.fillCircle(-this.keeperW / 2, 0, 7);
+        this.keeperGfx.fillCircle(this.keeperW / 2, 0, 7);
+
+        // Eyes
+        this.keeperGfx.fillStyle(0x111111, 1);
+        this.keeperGfx.fillCircle(-6, -4, 2);
+        this.keeperGfx.fillCircle(6, -4, 2);
+      }
+
+      drawBall() {
+        this.ballGfx.clear();
+        this.ballGfx.x = this.ballX;
+        this.ballGfx.y = this.ballY;
+        this.ballGfx.setScale(this.ballScale);
+        this.ballGfx.rotation = this.ballSpin;
+
+        // Shadow when on ground
+        if (this.ballState === 'idle') {
+          this.ballGfx.fillStyle(0x000000, 0.3);
+          this.ballGfx.fillEllipse(2, this.ballRadius + 2, this.ballRadius * 1.8, 6);
+        }
+
+        // White base
+        this.ballGfx.fillStyle(0xffffff, 1);
+        this.ballGfx.fillCircle(0, 0, this.ballRadius);
+
+        // Black soccer pattern
+        this.ballGfx.fillStyle(0x222222, 1);
+        this.ballGfx.fillCircle(0, 0, 5);
+        this.ballGfx.fillCircle(-8, -5, 3.5);
+        this.ballGfx.fillCircle(8, -5, 3.5);
+        this.ballGfx.fillCircle(-6, 7, 3.5);
+        this.ballGfx.fillCircle(6, 7, 3.5);
+      }
+
+      shoot(vx, vy) {
+        this.ballState = 'shot';
+        this.ballVX = Phaser.Math.Clamp(vx, -220, 220);
+        this.ballVY = Phaser.Math.Clamp(vy, -700, -420);
+        playBeep(260, 'triangle', 0.12);
+      }
+
+      showFeedback(text, color) {
+        this.feedbackText.setText(text);
+        this.feedbackText.setColor(color);
+        this.feedbackText.setAlpha(1);
+        this.feedbackText.setScale(0.7);
+
+        this.tweens.add({
+          targets: this.feedbackText,
+          y: GAME_H * 0.35,
+          scale: 1.3,
+          alpha: 0,
+          duration: 700,
+          ease: 'Back.easeOut',
+          onComplete: () => {
+            this.feedbackText.y = GAME_H * 0.42;
+          }
+        });
+      }
+
+      startRun() {
+        this.gameState = 'playing';
+        this.shotsRemaining = 5;
+        this.score = 0;
+        this.updateHUD();
+        this.resetBall();
+      }
+
+      updateHUD() {
+        document.getElementById('hudScore').textContent = this.score;
+        let ballsStr = '';
+        for (let i = 0; i < 5; i++) {
+          ballsStr += i < (5 - this.shotsRemaining) ? '⚪' : '⚽';
+        }
+        document.getElementById('hudShots').textContent = ballsStr;
+      }
+
+      resetBall() {
+        this.ballState = 'idle';
+        this.ballX = this.ballSpawnX;
+        this.ballY = this.ballSpawnY;
+        this.ballScale = 1;
+        this.ballVX = 0;
+        this.ballVY = 0;
+        this.ballSpin = 0;
+        this.drawBall();
+      }
+
+      update(time, delta) {
+        const dt = delta / 1000;
+
+        // Move Goalkeeper
+        if (this.gameState === 'playing') {
+          this.keeperX += this.keeperSpeed * this.keeperDir * dt;
+          const minK = this.goalPostLeft + this.keeperW / 2 + 10;
+          const maxK = this.goalPostRight - this.keeperW / 2 - 10;
+
+          if (this.keeperX >= maxK) {
+            this.keeperX = maxK;
+            this.keeperDir = -1;
+          } else if (this.keeperX <= minK) {
+            this.keeperX = minK;
+            this.keeperDir = 1;
+          }
+          this.drawKeeper();
+        }
+
+        // Ball physics
+        if (this.ballState === 'shot') {
+          this.ballX += this.ballVX * dt;
+          this.ballY += this.ballVY * dt;
+          this.ballSpin += 6 * dt;
+
+          // Ball scales down with distance to simulate 3D depth
+          const progress = Phaser.Math.Clamp((this.ballSpawnY - this.ballY) / (this.ballSpawnY - this.goalCrossbarY), 0, 1);
+          this.ballScale = 1 - (progress * 0.45);
+          this.drawBall();
+
+          // Check if ball reached goal line
+          if (this.ballY <= this.goalCrossbarY + 10) {
+            const currentR = this.ballRadius * this.ballScale;
+
+            // Keeper save check
+            const keeperDist = Math.abs(this.ballX - this.keeperX);
+            if (keeperDist < (this.keeperW / 2 + currentR)) {
+              this.ballState = 'saved';
+              playBeep(180, 'sawtooth', 0.2);
+              this.showFeedback('SAVED! 🧤', '#ff6b6b');
+              this.finishShot(false);
+            }
+            // In goal check
+            else if (this.ballX > this.goalPostLeft + currentR && this.ballX < this.goalPostRight - currentR) {
+              this.ballState = 'scored';
+              this.score++;
+              playBeep(920, 'sine', 0.18);
+              this.showFeedback('GOAL! ⚽🔥', '#6bcb77');
+              this.finishShot(true);
+            }
+            // Off target
+            else {
+              this.ballState = 'missed';
+              playBeep(140, 'sine', 0.15);
+              this.showFeedback('MISSED! 💨', '#ffd93d');
+              this.finishShot(false);
+            }
+          }
+        }
+      }
+
+      finishShot(scored) {
+        this.shotsRemaining--;
+        this.updateHUD();
+
+        this.time.delayedCall(800, () => {
+          if (this.shotsRemaining > 0) {
+            // Speed up keeper for next shot
+            this.keeperSpeed += 30;
+            this.resetBall();
+          } else {
+            this.endGame();
+          }
+        });
+      }
+
+      endGame() {
+        this.gameState = 'over';
+        SharedGame.submitScore('kick-shot', this.score).then(isNewHigh => {
+          document.getElementById('goScore').textContent = this.score;
+          const badge = document.getElementById('goNewHigh');
+          if (isNewHigh) {
+            badge.classList.remove('hidden');
+            SharedGame.confetti(60);
+          } else {
+            badge.classList.add('hidden');
+          }
+          document.getElementById('gameoverOverlay').classList.remove('hidden');
+        });
+      }
+    }
+
+    const config = {
+      type: Phaser.AUTO,
+      width: GAME_W,
+      height: GAME_H,
+      backgroundColor: '#0d0d1a',
+      scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+      },
+      scene: [KickScene]
+    };
+
+    const game = new Phaser.Game(config);
+
+    document.getElementById('startBtn').addEventListener('click', () => {
+      document.getElementById('startOverlay').classList.add('hidden');
+      const scene = game.scene.getScene('KickScene');
+      if (scene) scene.startRun();
+    });
+
+    document.getElementById('restartBtn').addEventListener('click', () => {
+      document.getElementById('gameoverOverlay').classList.add('hidden');
+      const scene = game.scene.getScene('KickScene');
+      if (scene) scene.startRun();
+    });
+  </script>
+</body>
+</html>

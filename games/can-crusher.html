@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Can Crusher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@400;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <script src="../js/firebase-config.js"></script>
+  <script src="../js/shared.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0d0d1a; overflow: hidden; }
+    canvas { display: block; }
+
+    #start-screen, #gameover-screen {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.82);
+      z-index: 100;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Nunito', sans-serif;
+    }
+    #start-screen.show, #gameover-screen.show { display: flex; }
+
+    .modal-box {
+      background: linear-gradient(160deg, #3d1a00, #6b2e00);
+      border: 3px solid #f7971e;
+      border-radius: 24px;
+      padding: 32px 28px;
+      width: 88%;
+      max-width: 360px;
+      text-align: center;
+      box-shadow: 0 0 40px rgba(247,151,30,0.4);
+    }
+
+    .modal-emoji { font-size: 64px; margin-bottom: 8px; }
+    .modal-title {
+      font-family: 'Fredoka One', cursive;
+      font-size: 42px;
+      color: #f7971e;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+      margin-bottom: 8px;
+    }
+    .modal-subtitle {
+      font-size: 15px;
+      color: #ffe8c0;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+    .best-score {
+      font-size: 15px;
+      color: #ffd93d;
+      font-weight: 700;
+      margin-bottom: 20px;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 14px 32px;
+      border-radius: 50px;
+      border: none;
+      font-family: 'Fredoka One', cursive;
+      font-size: 22px;
+      cursor: pointer;
+      margin: 6px;
+      min-width: 140px;
+      transition: transform 0.1s;
+      touch-action: manipulation;
+    }
+    .btn:active { transform: scale(0.95); }
+    .btn-start { background: linear-gradient(135deg, #f7971e, #ffd200); color: #3d1a00; }
+    .btn-play  { background: linear-gradient(135deg, #f7971e, #ffd200); color: #3d1a00; }
+    .btn-home  { background: linear-gradient(135deg, #4ecdc4, #1a9e97); color: #fff; }
+
+    .score-big {
+      font-family: 'Fredoka One', cursive;
+      font-size: 54px;
+      color: #fff;
+      margin: 8px 0;
+    }
+    .score-label { font-size: 15px; color: #ffe8c0; margin-bottom: 6px; }
+    .new-high {
+      display: inline-block;
+      background: #ffd93d;
+      color: #3d1a00;
+      font-family: 'Fredoka One', cursive;
+      font-size: 18px;
+      padding: 4px 16px;
+      border-radius: 20px;
+      margin-bottom: 10px;
+    }
+    .bonus-msg {
+      background: linear-gradient(135deg, #6bcb77, #3da84a);
+      color: #fff;
+      font-family: 'Fredoka One', cursive;
+      font-size: 18px;
+      padding: 6px 18px;
+      border-radius: 16px;
+      margin-bottom: 10px;
+    }
+    .celebration-msg {
+      font-size: 32px;
+      margin-bottom: 6px;
+    }
+
+    #hud {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 50;
+      pointer-events: none;
+    }
+    #hud.show { display: block; }
+
+    #back-btn {
+      position: fixed;
+      top: 12px; left: 12px;
+      z-index: 60;
+      background: rgba(0,0,0,0.5);
+      border: 2px solid #f7971e;
+      border-radius: 50%;
+      width: 48px; height: 48px;
+      font-size: 22px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      color: #f7971e;
+      touch-action: manipulation;
+    }
+    #back-btn.show { display: flex; }
+    #back-btn:active { transform: scale(0.9); }
+
+    #aim-cursor {
+      display: none;
+      position: fixed;
+      width: 36px; height: 36px;
+      border: 3px solid #ffd93d;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 55;
+      box-shadow: 0 0 10px rgba(255,211,61,0.8);
+      animation: pulse 0.8s ease-in-out infinite alternate;
+    }
+    #aim-cursor.show { display: block; }
+    @keyframes pulse {
+      from { box-shadow: 0 0 6px rgba(255,211,61,0.6); transform: translate(-50%,-50%) scale(1); }
+      to   { box-shadow: 0 0 16px rgba(255,211,61,1);   transform: translate(-50%,-50%) scale(1.15); }
+    }
+
+    #phase-label {
+      display: none;
+      position: fixed;
+      bottom: 100px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.65);
+      color: #ffd93d;
+      font-family: 'Fredoka One', cursive;
+      font-size: 18px;
+      padding: 8px 24px;
+      border-radius: 20px;
+      pointer-events: none;
+      z-index: 55;
+      white-space: nowrap;
+    }
+    #phase-label.show { display: block; }
+
+    /* Throw origin indicator */
+    #throw-origin {
+      display: none;
+      position: fixed;
+      width: 50px; height: 50px;
+      border: 3px dashed #9d0208;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 54;
+    }
+    #throw-origin.show { display: block; }
+  </style>
+</head>
+<body>
+
+<!-- Start Screen -->
+<div id="start-screen" class="show">
+  <div class="modal-box">
+    <div class="modal-emoji">🎳</div>
+    <div class="modal-title">Can Crusher</div>
+    <div class="modal-subtitle">
+      Tap anywhere to set your aim 🎯<br>
+      Tap again to throw!<br>
+      Knock down all 6 cans with 5 balls!
+    </div>
+    <div class="best-score" id="start-best">Best: 0 pts</div>
+    <button class="btn btn-start" id="start-btn">PLAY!</button>
+  </div>
+</div>
+
+<!-- Game Over Screen -->
+<div id="gameover-screen">
+  <div class="modal-box">
+    <div class="celebration-msg" id="go-celebration"></div>
+    <div class="modal-title" style="font-size:28px; margin-bottom:4px;">Round Over!</div>
+    <div class="score-label">Cans Knocked Down</div>
+    <div class="score-big" id="go-score">0 / 6</div>
+    <div id="go-new-high" class="new-high" style="display:none">🏆 NEW HIGH SCORE!</div>
+    <div id="go-bonus" class="bonus-msg" style="display:none">🎉 BONUS +10 (All cans, ≤3 balls!)</div>
+    <div class="score-label" id="go-total-label" style="margin-top:4px;color:#ffd93d;font-weight:800;font-size:17px;"></div>
+    <div style="margin-top:16px;">
+      <button class="btn btn-play" id="play-again-btn">PLAY AGAIN</button>
+      <button class="btn btn-home" id="home-btn">HOME</button>
+    </div>
+  </div>
+</div>
+
+<!-- Back Button -->
+<button id="back-btn">←</button>
+
+<!-- HUD -->
+<div id="hud"></div>
+
+<!-- Aim cursor -->
+<div id="aim-cursor"></div>
+
+<!-- Throw origin marker -->
+<div id="throw-origin"></div>
+
+<!-- Phase label -->
+<div id="phase-label">Tap to aim! 🎯</div>
+
+<script>
+(function() {
+  'use strict';
+
+  const GAME_W = window.innerWidth;
+  const GAME_H = window.innerHeight;
+  const GAME_ID = 'can-crusher';
+
+  // ── UI refs ──────────────────────────────────────────────────────────────
+  const startScreen    = document.getElementById('start-screen');
+  const gameoverScreen = document.getElementById('gameover-screen');
+  const startBest      = document.getElementById('start-best');
+  const startBtn       = document.getElementById('start-btn');
+  const playAgainBtn   = document.getElementById('play-again-btn');
+  const homeBtn        = document.getElementById('home-btn');
+  const backBtn        = document.getElementById('back-btn');
+  const hudEl          = document.getElementById('hud');
+  const aimCursor      = document.getElementById('aim-cursor');
+  const throwOrigin    = document.getElementById('throw-origin');
+  const phaseLabel     = document.getElementById('phase-label');
+  const goScore        = document.getElementById('go-score');
+  const goNewHigh      = document.getElementById('go-new-high');
+  const goBonus        = document.getElementById('go-bonus');
+  const goCelebration  = document.getElementById('go-celebration');
+  const goTotalLabel   = document.getElementById('go-total-label');
+
+  // ── Player guard ─────────────────────────────────────────────────────────
+  const player = SharedGame.guardPlayer();
+  if (!player) return;
+
+  // ── Best score ───────────────────────────────────────────────────────────
+  let bestScore = SharedGame.getHighScore(GAME_ID) || 0;
+  startBest.textContent = 'Best: ' + bestScore + ' pts';
+
+  // ── Game scene ref ────────────────────────────────────────────────────────
+  let gameScene = null;
+
+  // ── Button handlers ────────────────────────────────────────────────────────
+  backBtn.addEventListener('click', () => SharedGame.goHome());
+
+  startBtn.addEventListener('click', () => {
+    startScreen.classList.remove('show');
+    backBtn.classList.add('show');
+    hudEl.classList.add('show');
+    phaseLabel.classList.add('show');
+    throwOrigin.classList.add('show');
+    if (gameScene) gameScene.startGame();
+  });
+
+  playAgainBtn.addEventListener('click', () => {
+    gameoverScreen.classList.remove('show');
+    if (gameScene) gameScene.startGame();
+  });
+
+  homeBtn.addEventListener('click', () => SharedGame.goHome());
+
+  // ── Phaser Scene ──────────────────────────────────────────────────────────
+  class GameScene extends Phaser.Scene {
+    constructor() { super({ key: 'GameScene' }); }
+
+    get SHELF_Y()   { return Math.round(GAME_H * 0.55); }
+    get ORIGIN_X()  { return Math.round(GAME_W * 0.15); }
+    get ORIGIN_Y()  { return Math.round(GAME_H * 0.85); }
+    get CAN_W()     { return Math.max(28, Math.round(GAME_W * 0.085)); }
+    get CAN_H()     { return Math.round(this.CAN_W * 1.38); }
+    get BALL_R()    { return Math.max(14, Math.round(GAME_W * 0.038)); }
+    get GRAVITY()   { return 950; }
+    get MAX_BALLS() { return 5; }
+
+    // ── CREATE ─────────────────────────────────────────────────────────────
+    create() {
+      gameScene = this;
+
+      this._buildTextures();
+      this._buildBackground();
+      this._buildShelf();
+      this._buildBunting();
+      this._setupInput();
+
+      // Position throw-origin indicator
+      throwOrigin.style.left = this.ORIGIN_X + 'px';
+      throwOrigin.style.top  = this.ORIGIN_Y + 'px';
+
+      this._dotGraphics = this.add.graphics();
+      this._dotGraphics.setDepth(10);
+
+      this.startGame();
+    }
+
+    // ── TEXTURES ───────────────────────────────────────────────────────────
+    _buildTextures() {
+      const cw = this.CAN_W, ch = this.CAN_H;
+      const sy = 6; // silver strip
+
+      // ---- Can ----
+      {
+        const g = this.make.graphics({ x: 0, y: 0, add: false });
+        // Shadow/edge
+        g.fillStyle(0x8a0000, 1);
+        g.fillRoundedRect(2, sy + 2, cw - 2, ch - sy * 2 - 2, 4);
+        // Red body
+        g.fillStyle(0xe63946, 1);
+        g.fillRoundedRect(0, sy, cw - 2, ch - sy * 2, 5);
+        // Silver top
+        g.fillStyle(0xadb5bd, 1);
+        g.fillRoundedRect(0, 0, cw - 2, sy + 5, { tl: 5, tr: 5, bl: 0, br: 0 });
+        // Silver bottom
+        g.fillStyle(0x8d9399, 1);
+        g.fillRoundedRect(0, ch - sy - 1, cw - 2, sy + 1, { tl: 0, tr: 0, bl: 5, br: 5 });
+        // White label
+        g.fillStyle(0xffffff, 0.9);
+        g.fillRect(3, Math.round(ch * 0.33), cw - 7, Math.round(ch * 0.32));
+        // Red stripes on label
+        g.fillStyle(0xe63946, 1);
+        g.fillRect(5, Math.round(ch * 0.38), cw - 11, 3);
+        g.fillRect(5, Math.round(ch * 0.47), cw - 11, 3);
+        // CAN text sim
+        g.fillStyle(0x9d0208, 1);
+        g.fillRect(Math.round(cw * 0.3), Math.round(ch * 0.42), Math.round(cw * 0.4), 2);
+        // Shine strip
+        g.fillStyle(0xffffff, 0.2);
+        g.fillRect(Math.round(cw * 0.1), sy + 3, Math.round(cw * 0.18), ch - sy * 2 - 6);
+        g.generateTexture('can', cw, ch);
+        g.destroy();
+      }
+
+      // ---- Ball ----
+      {
+        const bd = this.BALL_R * 2;
+        const br = this.BALL_R;
+        const g = this.make.graphics({ x: 0, y: 0, add: false });
+        // Dark shadow circle
+        g.fillStyle(0x4a000a, 0.6);
+        g.fillCircle(br + 2, br + 2, br);
+        // Main ball
+        g.fillStyle(0x9d0208, 1);
+        g.fillCircle(br, br, br);
+        // Gradient inner (lighter center-left)
+        g.fillStyle(0xc0392b, 1);
+        g.fillCircle(Math.round(br * 0.75), Math.round(br * 0.7), Math.round(br * 0.6));
+        // Shine
+        g.fillStyle(0xffffff, 0.7);
+        g.fillCircle(Math.round(br * 0.5), Math.round(br * 0.4), Math.round(br * 0.28));
+        g.fillStyle(0xffffff, 0.3);
+        g.fillCircle(Math.round(br * 0.6), Math.round(br * 0.5), Math.round(br * 0.18));
+        g.generateTexture('ball', bd + 4, bd + 4);
+        g.destroy();
+      }
+
+      // ---- Impact star burst ----
+      {
+        const g = this.make.graphics({ x: 0, y: 0, add: false });
+        const pts = 8, r1 = 22, r2 = 10, cx = 26, cy = 26;
+        // Outer glow
+        g.fillStyle(0xff9f1c, 0.5);
+        g.fillCircle(cx, cy, r1 + 4);
+        // Star
+        g.fillStyle(0xffd93d, 1);
+        g.beginPath();
+        for (let i = 0; i < pts * 2; i++) {
+          const ang = (i * Math.PI / pts) - Math.PI / 2;
+          const r = i % 2 === 0 ? r1 : r2;
+          if (i === 0) g.moveTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
+          else g.lineTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
+        }
+        g.closePath();
+        g.fillPath();
+        // Center flash
+        g.fillStyle(0xffffff, 0.9);
+        g.fillCircle(cx, cy, 6);
+        g.generateTexture('star', 52, 52);
+        g.destroy();
+      }
+
+      // ---- Particle dot ----
+      {
+        const g = this.make.graphics({ x: 0, y: 0, add: false });
+        g.fillStyle(0xffd93d, 1);
+        g.fillCircle(4, 4, 4);
+        g.generateTexture('dot', 8, 8);
+        g.destroy();
+      }
+    }
+
+    // ── BACKGROUND ─────────────────────────────────────────────────────────
+    _buildBackground() {
+      const g = this.add.graphics();
+      // Warm carnival gradient — dark amber to mid-brown
+      const steps = 24;
+      for (let i = 0; i < steps; i++) {
+        const t = i / (steps - 1);
+        const r = Math.round(Phaser.Math.Linear(0x18, 0x52, t));
+        const gr= Math.round(Phaser.Math.Linear(0x07, 0x22, t));
+        const b = Math.round(Phaser.Math.Linear(0x00, 0x05, t));
+        g.fillStyle((r << 16) | (gr << 8) | b, 1);
+        const y0 = Math.round((GAME_H / steps) * i);
+        const y1 = Math.round((GAME_H / steps) * (i + 1)) + 1;
+        g.fillRect(0, y0, GAME_W, y1 - y0);
+      }
+
+      // Plank wall lines
+      const pg = this.add.graphics();
+      pg.lineStyle(1, 0x3a1800, 0.35);
+      for (let yy = 50; yy < this.SHELF_Y - 20; yy += 55) {
+        pg.lineBetween(0, yy, GAME_W, yy);
+      }
+      // Floor
+      const fg = this.add.graphics();
+      fg.fillStyle(0x2d1200, 1);
+      fg.fillRect(0, this.SHELF_Y + 22, GAME_W, GAME_H - this.SHELF_Y - 22);
+      fg.lineStyle(2, 0x3a1900, 1);
+      for (let xx = 0; xx < GAME_W; xx += 50) {
+        fg.lineBetween(xx, this.SHELF_Y + 22, xx + 25, GAME_H);
+      }
+    }
+
+    // ── SHELF ──────────────────────────────────────────────────────────────
+    _buildShelf() {
+      const sg = this.add.graphics();
+      const sy = this.SHELF_Y;
+      const th = 22;
+
+      // Drop shadow
+      sg.fillStyle(0x000000, 0.4);
+      sg.fillRect(0, sy + th, GAME_W, 10);
+
+      // Main plank
+      sg.fillStyle(0x8B4513, 1);
+      sg.fillRect(0, sy, GAME_W, th);
+
+      // Top highlight
+      sg.fillStyle(0xc67c3e, 0.55);
+      sg.fillRect(0, sy, GAME_W, 5);
+
+      // Bottom edge darker
+      sg.fillStyle(0x5a2d00, 0.6);
+      sg.fillRect(0, sy + th - 4, GAME_W, 4);
+
+      // Grain lines
+      sg.lineStyle(1, 0x6b3300, 0.4);
+      for (let xx = 0; xx < GAME_W; xx += 50) {
+        sg.lineBetween(xx, sy + 2, xx + 30, sy + th - 2);
+      }
+
+      // Bracket supports
+      sg.fillStyle(0x4a2000, 1);
+      const bpos = [GAME_W * 0.08, GAME_W * 0.5, GAME_W * 0.92];
+      for (const bx of bpos) {
+        sg.fillRect(bx - 7, sy + th, 14, 32);
+        sg.fillStyle(0x6b3200, 0.5);
+        sg.fillRect(bx - 5, sy + th, 10, 32);
+        sg.fillStyle(0x4a2000, 1);
+      }
+    }
+
+    // ── BUNTING ────────────────────────────────────────────────────────────
+    _buildBunting() {
+      const bg = this.add.graphics();
+      bg.setDepth(2);
+      const colors = [0xe63946, 0xffd93d, 0x6bcb77, 0x4ecdc4, 0xc084fc, 0xff6b9d, 0xf7971e];
+      const fW = 30, fH = 40;
+      const ry = 30;
+      const count = Math.ceil(GAME_W / fW) + 2;
+
+      // Rope
+      bg.lineStyle(2, 0x4a2000, 0.85);
+      bg.lineBetween(-10, ry, GAME_W + 10, ry);
+
+      // Second rope line for thickness
+      bg.lineStyle(1, 0x7a4a00, 0.4);
+      bg.lineBetween(-10, ry - 1, GAME_W + 10, ry - 1);
+
+      for (let i = 0; i < count; i++) {
+        const x = i * fW - 10;
+        const col = colors[i % colors.length];
+        // Flag shadow
+        bg.fillStyle(0x000000, 0.2);
+        bg.beginPath();
+        bg.moveTo(x + 1, ry + 1);
+        bg.lineTo(x + fW + 1, ry + 1);
+        bg.lineTo(x + fW / 2 + 1, ry + fH + 1);
+        bg.closePath();
+        bg.fillPath();
+        // Flag
+        bg.fillStyle(col, 0.95);
+        bg.beginPath();
+        bg.moveTo(x, ry);
+        bg.lineTo(x + fW, ry);
+        bg.lineTo(x + fW / 2, ry + fH);
+        bg.closePath();
+        bg.fillPath();
+        // Flag highlight
+        bg.fillStyle(0xffffff, 0.15);
+        bg.beginPath();
+        bg.moveTo(x + 2, ry);
+        bg.lineTo(x + fW / 2, ry);
+        bg.lineTo(x + fW / 2, ry + fH * 0.6);
+        bg.closePath();
+        bg.fillPath();
+      }
+    }
+
+    // ── CANS SETUP ─────────────────────────────────────────────────────────
+    _setupCans() {
+      if (this._cans) {
+        this._cans.forEach(c => { if (c.sprite) c.sprite.destroy(); });
+      }
+      this._cans = [];
+
+      const cw = this.CAN_W, ch = this.CAN_H;
+      const sy = this.SHELF_Y;
+      const gap = Math.round(cw * 0.28);
+      const totalW = cw * 3 + gap * 2;
+      const startX = (GAME_W - totalW) / 2 + cw / 2;
+
+      // bottom=row0 (y = shelf_y - ch/2), middle=row1, top=row2
+      const rows = [
+        [startX,              startX + cw + gap,       startX + 2 * (cw + gap)],
+        [startX + (cw+gap)/2, startX + (cw+gap)/2 + cw + gap],
+        [startX + (cw + gap)],
+      ];
+
+      rows.forEach((row, rowIdx) => {
+        row.forEach(cx => {
+          const cy = sy - Math.round(ch / 2) - rowIdx * (ch + 1);
+          const sprite = this.add.image(cx, cy, 'can');
+          sprite.setDepth(5);
+          this._cans.push({
+            sprite,
+            x: cx, y: cy,
+            vx: 0, vy: 0,
+            angle: 0,
+            spinning: false,
+            knocked: false
+          });
+        });
+      });
+    }
+
+    // ── BALL ───────────────────────────────────────────────────────────────
+    _setupBall() {
+      if (this._ballSprite) this._ballSprite.destroy();
+      this._ballSprite = this.add.image(this.ORIGIN_X, this.ORIGIN_Y, 'ball');
+      this._ballSprite.setDepth(8);
+      this._ballActive = false;
+      this._bx = this.ORIGIN_X;
+      this._by = this.ORIGIN_Y;
+      this._bvx = 0;
+      this._bvy = 0;
+    }
+
+    // ── INPUT ──────────────────────────────────────────────────────────────
+    _setupInput() {
+      this.input.on('pointerdown', (ptr) => {
+        if (!this._gameActive) return;
+        if (this._phase === 'aim') {
+          this._setAim(ptr.x, ptr.y);
+        } else if (this._phase === 'throw') {
+          this._throwBall();
+        }
+      });
+    }
+
+    _setAim(x, y) {
+      this._aimX = x;
+      this._aimY = y;
+      this._phase = 'throw';
+
+      aimCursor.style.left = x + 'px';
+      aimCursor.style.top  = y + 'px';
+      aimCursor.classList.add('show');
+
+      phaseLabel.textContent = 'Tap again to THROW! 💥';
+
+      this._drawArc();
+    }
+
+    _drawArc() {
+      this._dotGraphics.clear();
+      if (this._aimX === null) return;
+
+      const ox = this.ORIGIN_X, oy = this.ORIGIN_Y;
+      const dx = this._aimX - ox, dy = this._aimY - oy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const speed = Phaser.Math.Clamp(dist * 1.6, 180, 1000);
+      const ang = Math.atan2(dy, dx);
+      let vx = Math.cos(ang) * speed;
+      let vy = Math.sin(ang) * speed;
+      let px = ox, py = oy;
+      const dt = 1 / 60;
+
+      for (let i = 0; i < 100; i++) {
+        vy += this.GRAVITY * dt;
+        px += vx * dt;
+        py += vy * dt;
+        if (py > GAME_H + 50 || px < -50 || px > GAME_W + 50) break;
+        if (i % 3 === 0) {
+          const alpha = Phaser.Math.Linear(0.9, 0.2, i / 100);
+          const radius = Phaser.Math.Linear(5, 2, i / 100);
+          this._dotGraphics.fillStyle(0xffd93d, alpha);
+          this._dotGraphics.fillCircle(px, py, radius);
+        }
+      }
+    }
+
+    // ── THROW ──────────────────────────────────────────────────────────────
+    _throwBall() {
+      if (this._ballActive || this._ballsLeft <= 0) return;
+
+      this._ballsLeft--;
+      this._ballActive = true;
+      this._phase = 'inflight';
+
+      aimCursor.classList.remove('show');
+      phaseLabel.textContent = '';
+      phaseLabel.classList.remove('show');
+      this._dotGraphics.clear();
+
+      const ox = this.ORIGIN_X, oy = this.ORIGIN_Y;
+      const dx = this._aimX - ox, dy = this._aimY - oy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const speed = Phaser.Math.Clamp(dist * 1.6, 180, 1000);
+      const ang = Math.atan2(dy, dx);
+      this._bvx = Math.cos(ang) * speed;
+      this._bvy = Math.sin(ang) * speed;
+      this._bx = ox;
+      this._by = oy;
+
+      this._ballSprite.setVisible(true);
+      this._updateHUD();
+    }
+
+    // ── IMPACT ─────────────────────────────────────────────────────────────
+    _impactCan(can) {
+      if (can.spinning || can.knocked) return;
+      can.spinning = true;
+
+      const dx = can.x - this._bx;
+      can.vx = Phaser.Math.Clamp(dx * 3.5 + (Math.random() - 0.5) * 100, -600, 600);
+      can.vy = -Phaser.Math.Between(380, 520);
+
+      // Impact star
+      const star = this.add.image(can.x, can.y, 'star');
+      star.setDepth(12);
+      star.setAlpha(1);
+      this.tweens.add({
+        targets: star,
+        scaleX: 2.8, scaleY: 2.8,
+        alpha: 0,
+        duration: 380,
+        ease: 'Power2',
+        onComplete: () => star.destroy()
+      });
+
+      // Scatter particles
+      for (let i = 0; i < 5; i++) {
+        const dot = this.add.image(can.x, can.y, 'dot');
+        dot.setDepth(13);
+        const ang = Math.random() * Math.PI * 2;
+        const spd = Phaser.Math.Between(80, 220);
+        this.tweens.add({
+          targets: dot,
+          x: can.x + Math.cos(ang) * spd * 0.5,
+          y: can.y + Math.sin(ang) * spd * 0.5 - 40,
+          alpha: 0,
+          duration: 400,
+          ease: 'Power1',
+          onComplete: () => dot.destroy()
+        });
+      }
+
+      this.cameras.main.shake(100, 0.007);
+    }
+
+    // ── HUD ────────────────────────────────────────────────────────────────
+    _updateHUD() {
+      const knocked = this._cans ? this._cans.filter(c => c.knocked).length : 0;
+      let html = '';
+      // Balls right
+      html += '<div style="position:fixed;top:14px;right:14px;z-index:51;display:flex;align-items:center;gap:5px;pointer-events:none;">';
+      html += '<span style="font-family:\'Fredoka One\',cursive;font-size:13px;color:#ffd93d;margin-right:3px;">BALLS:</span>';
+      for (let i = 0; i < this.MAX_BALLS; i++) {
+        const used = i >= this._ballsLeft;
+        html += '<div style="width:20px;height:20px;border-radius:50%;background:' + (used ? '#333' : '#9d0208') + ';border:2px solid ' + (used ? '#444' : '#ff8888') + ';box-shadow:' + (used ? 'none' : '0 0 6px #ff444488') + '"></div>';
+      }
+      html += '</div>';
+      // Cans center
+      html += '<div style="position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:51;pointer-events:none;">';
+      html += '<span style="font-family:\'Fredoka One\',cursive;font-size:16px;color:#6bcb77;background:rgba(0,0,0,0.55);padding:4px 14px;border-radius:14px;white-space:nowrap;">🥫 ' + knocked + '/6</span>';
+      html += '</div>';
+      hudEl.innerHTML = html;
+    }
+
+    // ── START GAME ─────────────────────────────────────────────────────────
+    startGame() {
+      this._gameActive = true;
+      this._ballsLeft = this.MAX_BALLS;
+      this._phase = 'aim';
+      this._aimX = null;
+      this._aimY = null;
+      this._dotGraphics.clear();
+      aimCursor.classList.remove('show');
+
+      this._setupCans();
+      this._setupBall();
+      this._updateHUD();
+
+      phaseLabel.textContent = 'Tap to aim! 🎯';
+      phaseLabel.classList.add('show');
+
+      // Drop-in animation for cans
+      this._cans.forEach((c, i) => {
+        const targetY = c.y;
+        c.sprite.y = targetY - 220;
+        this.tweens.add({
+          targets: c.sprite,
+          y: targetY,
+          duration: 400,
+          delay: i * 55,
+          ease: 'Bounce.easeOut'
+        });
+      });
+    }
+
+    // ── UPDATE ─────────────────────────────────────────────────────────────
+    update(time, delta) {
+      if (!this._gameActive) return;
+      const dt = Math.min(delta / 1000, 0.05); // cap dt
+
+      // Ball physics
+      if (this._ballActive) {
+        this._bvy += this.GRAVITY * dt;
+        this._bx += this._bvx * dt;
+        this._by += this._bvy * dt;
+        this._ballSprite.x = this._bx;
+        this._ballSprite.y = this._by;
+        this._ballSprite.angle += 10;
+
+        // Collision check
+        const br = this.BALL_R;
+        for (const can of this._cans) {
+          if (can.spinning || can.knocked) continue;
+          const dx = this._bx - can.x;
+          const dy = this._by - can.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < br + this.CAN_W * 0.52) {
+            this._impactCan(can);
+            // Ball deflects
+            this._bvx *= 0.45;
+            this._bvy = -Math.abs(this._bvy) * 0.25;
+          }
+        }
+
+        // Ball off screen
+        if (this._by > GAME_H + 80 || this._bx < -80 || this._bx > GAME_W + 80) {
+          this._ballActive = false;
+          this._onBallLanded();
+        }
+      }
+
+      // Can physics
+      for (const can of this._cans) {
+        if (can.knocked) continue;
+        if (can.spinning) {
+          can.vy += this.GRAVITY * dt;
+          can.vx *= 0.998;
+          can.x += can.vx * dt;
+          can.y += can.vy * dt;
+          can.angle += can.vx * 0.08;
+          can.sprite.x = can.x;
+          can.sprite.y = can.y;
+          can.sprite.angle = can.angle;
+
+          if (can.y > this.SHELF_Y + 130) {
+            can.knocked = true;
+            can.spinning = false;
+            this.tweens.add({
+              targets: can.sprite,
+              alpha: 0,
+              y: can.y + 60,
+              duration: 350,
+              onComplete: () => { if (can.sprite) can.sprite.setVisible(false); }
+            });
+            this._updateHUD();
+          }
+        }
+      }
+    }
+
+    _onBallLanded() {
+      this._ballSprite.setVisible(false);
+
+      // Wait for cans physics to settle
+      this.time.delayedCall(1300, () => {
+        const knocked = this._cans.filter(c => c.knocked).length;
+        const allKnocked = knocked === 6;
+        const noMoreBalls = this._ballsLeft <= 0;
+
+        if (allKnocked || noMoreBalls) {
+          this._gameActive = false;
+          phaseLabel.classList.remove('show');
+          aimCursor.classList.remove('show');
+          this.time.delayedCall(500, () => this._showGameOver());
+          return;
+        }
+
+        this._setupBall();
+        this._phase = 'aim';
+        phaseLabel.textContent = 'Tap to aim! 🎯';
+        phaseLabel.classList.add('show');
+      });
+    }
+
+    _showGameOver() {
+      const knocked = this._cans.filter(c => c.knocked).length;
+      const ballsUsed = this.MAX_BALLS - this._ballsLeft;
+      const allKnocked = knocked === 6;
+      const bonusEarned = allKnocked && ballsUsed <= 3;
+      const finalScore = knocked + (bonusEarned ? 10 : 0);
+
+      SharedGame.submitScore(GAME_ID, finalScore);
+      const newBest = SharedGame.getHighScore(GAME_ID) || 0;
+      const isNewHigh = finalScore > 0 && finalScore >= bestScore;
+      bestScore = newBest;
+      startBest.textContent = 'Best: ' + newBest + ' pts';
+
+      goScore.textContent = knocked + ' / 6';
+      goNewHigh.style.display = isNewHigh ? 'inline-block' : 'none';
+      goBonus.style.display = bonusEarned ? 'block' : 'none';
+
+      if (allKnocked) {
+        goCelebration.textContent = '🎉🎊🏆';
+        goTotalLabel.textContent = 'PERFECT! Total: ' + finalScore + ' pts';
+        if (typeof SharedGame.confetti === 'function') SharedGame.confetti();
+      } else if (knocked >= 4) {
+        goCelebration.textContent = '👏🎯';
+        goTotalLabel.textContent = 'Nice throw! Total: ' + finalScore + ' pts';
+      } else if (knocked >= 2) {
+        goCelebration.textContent = '🎯';
+        goTotalLabel.textContent = 'Keep practicing! Total: ' + finalScore + ' pts';
+      } else {
+        goCelebration.textContent = knocked === 0 ? '😬' : '😅';
+        goTotalLabel.textContent = 'Better luck next time! Total: ' + finalScore + ' pts';
+      }
+
+      gameoverScreen.classList.add('show');
+    }
+  }
+
+  // ── Phaser Config ───────────────────────────────────────────────────────
+  const config = {
+    type: Phaser.AUTO,
+    width: GAME_W,
+    height: GAME_H,
+    backgroundColor: '#1a0800',
+    scale: {
+      mode: Phaser.Scale.FIT,
+      autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+    scene: [GameScene]
+  };
+
+  new Phaser.Game(config);
+
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Bottle Flip Frenzy</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="../js/firebase-config.js"></script>
+  <script src="../js/shared.js"></script>
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; background: #0d0d1a; }
+    canvas { display: block; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <div class="game-hud">
+    <button class="hud-back" onclick="SharedGame.goHome()">← Hub</button>
+    <div class="hud-score-block">
+      <div id="hudScore" class="hud-score">0</div>
+      <div class="hud-label">Flips Landed</div>
+    </div>
+    <div class="hud-right" style="text-align: right;">
+      <div id="hudTimer" style="font-family:'Fredoka One',cursive; font-size:1.4rem; color:var(--red);">45s</div>
+      <div class="hud-label">Time</div>
+    </div>
+  </div>
+
+  <div id="startOverlay" class="start-overlay">
+    <div class="start-box">
+      <span class="game-emoji">🍾</span>
+      <h1>Bottle Flip Frenzy</h1>
+      <p class="instructions">Swipe UP on the bottle to flip it! Stick upright landings on platforms before the 45s timer expires.</p>
+      <div class="best">⭐ Personal Best: <span id="startBest">0</span></div>
+      <button id="startBtn" class="btn btn-primary btn-lg btn-full" style="background: linear-gradient(135deg, #45b7d1, #258aa3);">START FLIPPING</button>
+    </div>
+  </div>
+
+  <div id="gameoverOverlay" class="gameover-overlay hidden">
+    <div class="gameover-box">
+      <span class="result-emoji" id="goEmoji">🍾</span>
+      <h2>Time's Up!</h2>
+      <div id="goNewHigh" class="new-high-badge hidden">🎉 NEW HIGH SCORE!</div>
+      <div id="goScore" class="score-big">0</div>
+      <div class="score-label">Perfect Landings</div>
+      <div class="gameover-actions">
+        <button id="restartBtn" class="btn btn-green btn-full">Flip Again</button>
+        <button class="btn btn-ghost btn-full" onclick="SharedGame.goHome()">Back to Arcade</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const player = SharedGame.guardPlayer();
+
+    const GAME_W = Math.min(window.innerWidth, 480);
+    const GAME_H = window.innerHeight;
+
+    let high = SharedGame.getHighScore('bottle-flip');
+    document.getElementById('startBest').textContent = high;
+
+    const audioCtx = (window.AudioContext || window.webkitAudioContext) ? new (window.AudioContext || window.webkitAudioContext)() : null;
+    function playBeep(freq, type = 'sine', duration = 0.08) {
+      if (!audioCtx) return;
+      try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.14, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch(e) {}
+    }
+
+    class BottleScene extends Phaser.Scene {
+      constructor() {
+        super('BottleScene');
+      }
+
+      create() {
+        this.gameState = 'ready'; // ready, playing, over
+        this.score = 0;
+        this.timeLeft = 45;
+        this.timerEvent = null;
+
+        // Background
+        const bg = this.add.graphics();
+        bg.fillGradientStyle(0x111625, 0x111625, 0x1f233d, 0x241d3b, 1);
+        bg.fillRect(0, 0, GAME_W, GAME_H);
+
+        // Platform / Table setup
+        this.platformGfx = this.add.graphics();
+        this.targetPlatformY = GAME_H * 0.72;
+        this.platformX = GAME_W * 0.5;
+        this.platformW = 180;
+        this.drawPlatform();
+
+        // Bottle parameters
+        this.bottleW = 32;
+        this.bottleH = 80;
+        this.bottleState = 'idle'; // idle, flying, landed, fallen
+        this.bottleX = this.platformX;
+        this.bottleY = this.targetPlatformY - this.bottleH / 2;
+        this.bottleVX = 0;
+        this.bottleVY = 0;
+        this.bottleAngle = 0;
+        this.bottleAV = 0;
+        this.gravity = 1400;
+
+        this.bottleGfx = this.add.graphics();
+        this.drawBottle();
+
+        // FX feedback text
+        this.feedbackText = this.add.text(GAME_W / 2, GAME_H * 0.38, '', {
+          fontFamily: 'Fredoka One',
+          fontSize: '32px',
+          color: '#ffd93d'
+        }).setOrigin(0.5).setAlpha(0);
+
+        // Swipe handling
+        this.swipeStartY = 0;
+        this.swipeStartTime = 0;
+        this.isSwiping = false;
+
+        this.input.on('pointerdown', (pointer) => {
+          if (this.gameState !== 'playing' || this.bottleState !== 'idle') return;
+          this.swipeStartY = pointer.y;
+          this.swipeStartX = pointer.x;
+          this.swipeStartTime = this.time.now;
+          this.isSwiping = true;
+        });
+
+        this.input.on('pointerup', (pointer) => {
+          if (!this.isSwiping) return;
+          this.isSwiping = false;
+
+          const dy = pointer.y - this.swipeStartY;
+          const dt = Math.max(1, this.time.now - this.swipeStartTime);
+          const speed = (-dy / dt) * 1000;
+
+          if (dy < -30 && speed > 200) {
+            this.launchFlip(Math.min(speed, 950));
+          } else if (Math.abs(dy) < 15) {
+            // Quick tap flip fallback
+            this.launchFlip(580);
+          }
+        });
+      }
+
+      drawPlatform() {
+        this.platformGfx.clear();
+        // Shelf wood
+        this.platformGfx.fillStyle(0x5d4037, 1);
+        this.platformGfx.fillRoundedRect(this.platformX - this.platformW / 2, this.targetPlatformY, this.platformW, 20, 4);
+        // Top edge highlight
+        this.platformGfx.fillStyle(0x8d6e63, 1);
+        this.platformGfx.fillRect(this.platformX - this.platformW / 2, this.targetPlatformY, this.platformW, 4);
+        // Table legs
+        this.platformGfx.fillStyle(0x3e2723, 1);
+        this.platformGfx.fillRect(this.platformX - this.platformW / 2 + 15, this.targetPlatformY + 20, 14, GAME_H - this.targetPlatformY);
+        this.platformGfx.fillRect(this.platformX + this.platformW / 2 - 29, this.targetPlatformY + 20, 14, GAME_H - this.targetPlatformY);
+      }
+
+      drawBottle() {
+        this.bottleGfx.clear();
+        this.bottleGfx.x = this.bottleX;
+        this.bottleGfx.y = this.bottleY;
+        this.bottleGfx.rotation = this.bottleAngle;
+
+        const hw = this.bottleW / 2;
+        const hh = this.bottleH / 2;
+
+        // Bottle body (transparent cyan glass)
+        this.bottleGfx.fillStyle(0x45b7d1, 0.75);
+        this.bottleGfx.fillRoundedRect(-hw, -hh + 20, this.bottleW, this.bottleH - 20, 6);
+
+        // Water liquid level inside
+        this.bottleGfx.fillStyle(0x0288d1, 0.85);
+        this.bottleGfx.fillRoundedRect(-hw + 3, hh - 32, this.bottleW - 6, 28, 4);
+
+        // Bottle shoulder & neck
+        this.bottleGfx.fillStyle(0x45b7d1, 0.75);
+        this.bottleGfx.fillRect(-6, -hh + 6, 12, 16);
+
+        // Bottle cap
+        this.bottleGfx.fillStyle(0xff5722, 1);
+        this.bottleGfx.fillRoundedRect(-8, -hh, 16, 8, 2);
+
+        // Specular shine line
+        this.bottleGfx.fillStyle(0xffffff, 0.4);
+        this.bottleGfx.fillRect(-hw + 4, -hh + 24, 3, this.bottleH - 28);
+      }
+
+      launchFlip(speed) {
+        this.bottleState = 'flying';
+        this.bottleVY = -Math.max(480, speed * 0.95);
+        // Calculate angular velocity so it does roughly 1 to 2 rotations
+        const flightTime = (2 * Math.abs(this.bottleVY)) / this.gravity;
+        // Target 360 deg or 720 deg rotation
+        const rotations = speed > 700 ? 2 : 1;
+        this.bottleAV = (rotations * Math.PI * 2) / flightTime * (Phaser.Math.FloatBetween(0.92, 1.08));
+
+        playBeep(320, 'triangle', 0.12);
+      }
+
+      showFeedback(text, color) {
+        this.feedbackText.setText(text);
+        this.feedbackText.setColor(color);
+        this.feedbackText.setAlpha(1);
+        this.feedbackText.setScale(0.7);
+
+        this.tweens.add({
+          targets: this.feedbackText,
+          y: GAME_H * 0.32,
+          scale: 1.2,
+          alpha: 0,
+          duration: 650,
+          ease: 'Cubic.easeOut',
+          onComplete: () => {
+            this.feedbackText.y = GAME_H * 0.38;
+          }
+        });
+      }
+
+      startRun() {
+        this.gameState = 'playing';
+        this.score = 0;
+        this.timeLeft = 45;
+        document.getElementById('hudScore').textContent = '0';
+        document.getElementById('hudTimer').textContent = '45s';
+
+        if (this.timerEvent) this.timerEvent.remove();
+        this.timerEvent = this.time.addEvent({
+          delay: 1000,
+          repeat: 44,
+          callback: () => {
+            this.timeLeft--;
+            document.getElementById('hudTimer').textContent = this.timeLeft + 's';
+            if (this.timeLeft <= 0) {
+              this.endGame();
+            }
+          }
+        });
+
+        this.resetBottleOnPlatform();
+      }
+
+      resetBottleOnPlatform() {
+        // Randomize platform slightly
+        this.platformW = Phaser.Math.Between(130, 200);
+        this.targetPlatformY = Phaser.Math.Between(GAME_H * 0.65, GAME_H * 0.78);
+        this.drawPlatform();
+
+        this.bottleState = 'idle';
+        this.bottleX = this.platformX;
+        this.bottleY = this.targetPlatformY - this.bottleH / 2;
+        this.bottleAngle = 0;
+        this.bottleVX = 0;
+        this.bottleVY = 0;
+        this.bottleAV = 0;
+        this.drawBottle();
+      }
+
+      update(time, delta) {
+        const dt = delta / 1000;
+
+        if (this.bottleState === 'flying') {
+          this.bottleVY += this.gravity * dt;
+          this.bottleY += this.bottleVY * dt;
+          this.bottleAngle += this.bottleAV * dt;
+
+          this.drawBottle();
+
+          const landingY = this.targetPlatformY - this.bottleH / 2;
+
+          // Check if descending past platform height
+          if (this.bottleVY > 0 && this.bottleY >= landingY) {
+            // Normalize angle to [-PI, PI]
+            let normAngle = this.bottleAngle % (Math.PI * 2);
+            if (normAngle > Math.PI) normAngle -= Math.PI * 2;
+            if (normAngle < -Math.PI) normAngle += Math.PI * 2;
+
+            const deg = Math.abs(normAngle * (180 / Math.PI));
+
+            if (deg < 24) {
+              // Upright success!
+              this.bottleState = 'landed';
+              this.bottleY = landingY;
+              this.bottleAngle = 0;
+              this.drawBottle();
+
+              this.score++;
+              document.getElementById('hudScore').textContent = this.score;
+              playBeep(880, 'sine', 0.15);
+              this.showFeedback('PERFECT! +1', '#6bcb77');
+
+              this.time.delayedCall(450, () => {
+                if (this.gameState === 'playing') this.resetBottleOnPlatform();
+              });
+            } else {
+              // Miss / topple
+              this.bottleState = 'fallen';
+              playBeep(160, 'sawtooth', 0.18);
+              this.showFeedback('MISS!', '#ff6b6b');
+
+              // Topple animation
+              this.bottleAngle = normAngle > 0 ? Math.PI / 2 : -Math.PI / 2;
+              this.bottleY = this.targetPlatformY - this.bottleW / 2;
+              this.drawBottle();
+
+              this.time.delayedCall(500, () => {
+                if (this.gameState === 'playing') this.resetBottleOnPlatform();
+              });
+            }
+          }
+        }
+      }
+
+      endGame() {
+        if (this.gameState === 'over') return;
+        this.gameState = 'over';
+        if (this.timerEvent) this.timerEvent.remove();
+
+        SharedGame.submitScore('bottle-flip', this.score).then(isNewHigh => {
+          document.getElementById('goScore').textContent = this.score;
+          const badge = document.getElementById('goNewHigh');
+          if (isNewHigh) {
+            badge.classList.remove('hidden');
+            SharedGame.confetti(60);
+          } else {
+            badge.classList.add('hidden');
+          }
+          document.getElementById('gameoverOverlay').classList.remove('hidden');
+        });
+      }
+    }
+
+    const config = {
+      type: Phaser.AUTO,
+      width: GAME_W,
+      height: GAME_H,
+      backgroundColor: '#0d0d1a',
+      scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+      },
+      scene: [BottleScene]
+    };
+
+    const game = new Phaser.Game(config);
+
+    document.getElementById('startBtn').addEventListener('click', () => {
+      document.getElementById('startOverlay').classList.add('hidden');
+      const scene = game.scene.getScene('BottleScene');
+      if (scene) scene.startRun();
+    });
+
+    document.getElementById('restartBtn').addEventListener('click', () => {
+      document.getElementById('gameoverOverlay').classList.add('hidden');
+      const scene = game.scene.getScene('BottleScene');
+      if (scene) scene.startRun();
+    });
+  </script>
+</body>
+</html>

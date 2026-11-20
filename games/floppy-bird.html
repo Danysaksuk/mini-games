@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Floppy Bird</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="../js/firebase-config.js"></script>
+  <script src="../js/shared.js"></script>
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; background: #0d0d1a; }
+    canvas { display: block; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <div class="game-hud">
+    <button class="hud-back" onclick="SharedGame.goHome()">← Hub</button>
+    <div class="hud-score-block">
+      <div id="hudScore" class="hud-score">0</div>
+      <div class="hud-label">Score</div>
+    </div>
+    <div class="hud-right" style="text-align: right; font-weight: 800; font-size: 0.8rem; color: var(--accent);">
+      BEST: <span id="hudBest">0</span>
+    </div>
+  </div>
+
+  <div id="startOverlay" class="start-overlay">
+    <div class="start-box">
+      <span class="game-emoji">🐦</span>
+      <h1>Floppy Bird</h1>
+      <p class="instructions">Tap anywhere on screen to flap. Fly between pipes. Speed increases as you go!</p>
+      <div class="best">⭐ Personal Best: <span id="startBest">0</span></div>
+      <button id="startBtn" class="btn btn-primary btn-lg btn-full" style="background: linear-gradient(135deg, #4ecdc4, #2bb7ad);">TAP TO FLY</button>
+    </div>
+  </div>
+
+  <div id="gameoverOverlay" class="gameover-overlay hidden">
+    <div class="gameover-box">
+      <span class="result-emoji" id="goEmoji">💥</span>
+      <h2 id="goTitle">Crash!</h2>
+      <div id="goNewHigh" class="new-high-badge hidden">🎉 NEW HIGH SCORE!</div>
+      <div id="goScore" class="score-big">0</div>
+      <div class="score-label">Pipes Cleared</div>
+      <div class="gameover-actions">
+        <button id="restartBtn" class="btn btn-green btn-full">Play Again</button>
+        <button class="btn btn-ghost btn-full" onclick="SharedGame.goHome()">Back to Arcade</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const player = SharedGame.guardPlayer();
+
+    const GAME_W = Math.min(window.innerWidth, 480);
+    const GAME_H = window.innerHeight;
+
+    let currentScore = 0;
+    let high = SharedGame.getHighScore('floppy-bird');
+    document.getElementById('hudBest').textContent = high;
+    document.getElementById('startBest').textContent = high;
+
+    const audioCtx = (window.AudioContext || window.webkitAudioContext) ? new (window.AudioContext || window.webkitAudioContext)() : null;
+    function playBeep(freq, type = 'sine', duration = 0.08) {
+      if (!audioCtx) return;
+      try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch(e) {}
+    }
+
+    class FloppyScene extends Phaser.Scene {
+      constructor() {
+        super('FloppyScene');
+      }
+
+      preload() {}
+
+      create() {
+        this.gameState = 'ready'; // ready, playing, over
+        this.score = 0;
+        this.pipeTimer = 0;
+        this.pipeInterval = 1700;
+        this.pipeSpeed = 160;
+        this.pipes = [];
+
+        // Sky gradient background
+        const bg = this.add.graphics();
+        bg.fillGradientStyle(0x1a2a44, 0x1a2a44, 0x3d6a8a, 0x4e8ba6, 1);
+        bg.fillRect(0, 0, GAME_W, GAME_H);
+
+        // Clouds
+        this.clouds = [];
+        for (let i = 0; i < 4; i++) {
+          const c = this.add.graphics();
+          c.fillStyle(0xffffff, 0.25);
+          c.fillCircle(0, 0, 22);
+          c.fillCircle(18, -6, 26);
+          c.fillCircle(38, 0, 20);
+          c.x = Math.random() * GAME_W;
+          c.y = 70 + Math.random() * (GAME_H * 0.4);
+          c.speed = 15 + Math.random() * 20;
+          this.clouds.push(c);
+        }
+
+        // Ground
+        this.groundY = GAME_H - 60;
+        this.ground = this.add.graphics();
+        this.ground.fillStyle(0x3e2723, 1);
+        this.ground.fillRect(0, this.groundY, GAME_W, 60);
+        this.ground.fillStyle(0x4caf50, 1);
+        this.ground.fillRect(0, this.groundY, GAME_W, 10);
+
+        // Bird setup
+        this.birdY = GAME_H * 0.45;
+        this.birdX = GAME_W * 0.28;
+        this.birdVY = 0;
+        this.gravity = 980;
+        this.flapPower = -340;
+
+        this.birdGfx = this.add.graphics();
+        this.drawBird(0);
+
+        this.input.on('pointerdown', () => this.handleTap());
+      }
+
+      drawBird(wingPhase = 0) {
+        this.birdGfx.clear();
+        this.birdGfx.x = this.birdX;
+        this.birdGfx.y = this.birdY;
+
+        // Body
+        this.birdGfx.fillStyle(0xffd54f, 1);
+        this.birdGfx.fillCircle(0, 0, 16);
+
+        // Belly
+        this.birdGfx.fillStyle(0xfff9c4, 1);
+        this.birdGfx.fillCircle(4, 4, 10);
+
+        // Eye
+        this.birdGfx.fillStyle(0xffffff, 1);
+        this.birdGfx.fillCircle(7, -5, 5);
+        this.birdGfx.fillStyle(0x111111, 1);
+        this.birdGfx.fillCircle(9, -5, 2.5);
+
+        // Beak
+        this.birdGfx.fillStyle(0xff7043, 1);
+        this.birdGfx.beginPath();
+        this.birdGfx.moveTo(12, -2);
+        this.birdGfx.lineTo(22, 2);
+        this.birdGfx.lineTo(12, 6);
+        this.birdGfx.closePath();
+        this.birdGfx.fillPath();
+
+        // Wing
+        const wingOffset = Math.sin(wingPhase) * 4;
+        this.birdGfx.fillStyle(0xfbc02d, 1);
+        this.birdGfx.fillEllipse(-6, 2 + wingOffset, 12, 8);
+      }
+
+      handleTap() {
+        if (this.gameState === 'ready') return;
+        if (this.gameState === 'over') return;
+
+        this.birdVY = this.flapPower;
+        playBeep(480, 'sine', 0.08);
+      }
+
+      startRun() {
+        this.gameState = 'playing';
+        this.score = 0;
+        this.birdVY = this.flapPower;
+        this.pipeTimer = 400;
+        document.getElementById('hudScore').textContent = '0';
+      }
+
+      spawnPipes() {
+        const gap = Math.max(120, 160 - Math.floor(this.score / 5) * 4);
+        const minTop = 60;
+        const maxTop = (this.groundY - gap) - 60;
+        const topHeight = Phaser.Math.Between(minTop, maxTop);
+        const bottomY = topHeight + gap;
+        const bottomHeight = this.groundY - bottomY;
+
+        const pipePair = {
+          x: GAME_W + 40,
+          w: 54,
+          topH: topHeight,
+          bottomY: bottomY,
+          bottomH: bottomHeight,
+          passed: false,
+          topGfx: this.add.graphics(),
+          botGfx: this.add.graphics()
+        };
+
+        this.drawPipe(pipePair.topGfx, pipePair.x, 0, pipePair.w, pipePair.topH, true);
+        this.drawPipe(pipePair.botGfx, pipePair.x, pipePair.bottomY, pipePair.w, pipePair.bottomH, false);
+
+        this.pipes.push(pipePair);
+      }
+
+      drawPipe(gfx, x, y, w, h, isTop) {
+        gfx.clear();
+        // Pipe column
+        gfx.fillStyle(0x2e7d32, 1);
+        gfx.fillRect(x, y, w, h);
+        gfx.fillStyle(0x81c784, 1);
+        gfx.fillRect(x + 4, y, 6, h); // Highlight
+
+        // Pipe rim/cap
+        const rimH = 22;
+        const rimExtra = 4;
+        const rimY = isTop ? (y + h - rimH) : y;
+        gfx.fillStyle(0x1b5e20, 1);
+        gfx.fillRect(x - rimExtra, rimY, w + rimExtra * 2, rimH);
+        gfx.fillStyle(0xa5d6a7, 1);
+        gfx.fillRect(x - rimExtra + 4, rimY, 6, rimH);
+      }
+
+      update(time, delta) {
+        const dt = delta / 1000;
+
+        // Clouds scroll
+        this.clouds.forEach(c => {
+          c.x -= c.speed * dt;
+          if (c.x < -60) c.x = GAME_W + 40;
+        });
+
+        if (this.gameState === 'ready') {
+          // Gentle bob
+          this.birdY = (GAME_H * 0.45) + Math.sin(time / 200) * 8;
+          this.drawBird(time / 100);
+          return;
+        }
+
+        if (this.gameState === 'over') {
+          if (this.birdY < this.groundY - 14) {
+            this.birdVY += this.gravity * dt;
+            this.birdY += this.birdVY * dt;
+            this.drawBird(0);
+          }
+          return;
+        }
+
+        // Physics
+        this.birdVY += this.gravity * dt;
+        this.birdY += this.birdVY * dt;
+
+        // Angle tilt
+        const tilt = Phaser.Math.Clamp(this.birdVY / 400, -0.6, 1.1);
+        this.birdGfx.rotation = tilt;
+        this.drawBird(time / 80);
+
+        // Ground / Ceiling crash
+        if (this.birdY >= this.groundY - 14 || this.birdY <= 14) {
+          this.triggerGameOver();
+          return;
+        }
+
+        // Pipe spawning
+        this.pipeTimer += delta;
+        if (this.pipeTimer >= this.pipeInterval) {
+          this.pipeTimer = 0;
+          this.spawnPipes();
+        }
+
+        // Pipe updates & collision
+        for (let i = this.pipes.length - 1; i >= 0; i--) {
+          const p = this.pipes[i];
+          p.x -= (this.pipeSpeed + Math.min(100, this.score * 3)) * dt;
+
+          this.drawPipe(p.topGfx, p.x, 0, p.w, p.topH, true);
+          this.drawPipe(p.botGfx, p.x, p.bottomY, p.w, p.bottomH, false);
+
+          // Check pass
+          if (!p.passed && p.x + p.w < this.birdX) {
+            p.passed = true;
+            this.score++;
+            currentScore = this.score;
+            document.getElementById('hudScore').textContent = this.score;
+            playBeep(720, 'triangle', 0.1);
+          }
+
+          // Check collision
+          const bx = this.birdX;
+          const by = this.birdY;
+          const r = 13; // Bird hit radius
+          const hitX = (bx + r > p.x && bx - r < p.x + p.w);
+          if (hitX) {
+            if (by - r < p.topH || by + r > p.bottomY) {
+              this.triggerGameOver();
+              return;
+            }
+          }
+
+          // Offscreen cull
+          if (p.x + p.w < -20) {
+            p.topGfx.destroy();
+            p.botGfx.destroy();
+            this.pipes.splice(i, 1);
+          }
+        }
+      }
+
+      triggerGameOver() {
+        if (this.gameState === 'over') return;
+        this.gameState = 'over';
+        playBeep(180, 'sawtooth', 0.25);
+
+        // Feathers burst
+        const feathers = this.add.graphics();
+        feathers.fillStyle(0xffd54f, 1);
+        for (let i = 0; i < 12; i++) {
+          feathers.fillCircle(
+            this.birdX + (Math.random() - 0.5) * 40,
+            this.birdY + (Math.random() - 0.5) * 40,
+            3 + Math.random() * 4
+          );
+        }
+
+        SharedGame.submitScore('floppy-bird', this.score).then(isNewHigh => {
+          document.getElementById('goScore').textContent = this.score;
+          const badge = document.getElementById('goNewHigh');
+          if (isNewHigh) {
+            badge.classList.remove('hidden');
+            SharedGame.confetti(60);
+          } else {
+            badge.classList.add('hidden');
+          }
+          document.getElementById('hudBest').textContent = SharedGame.getHighScore('floppy-bird');
+          document.getElementById('gameoverOverlay').classList.remove('hidden');
+        });
+      }
+
+      resetGame() {
+        this.pipes.forEach(p => {
+          p.topGfx.destroy();
+          p.botGfx.destroy();
+        });
+        this.pipes = [];
+        this.birdY = GAME_H * 0.45;
+        this.birdVY = 0;
+        this.birdGfx.rotation = 0;
+        this.startRun();
+      }
+    }
+
+    const config = {
+      type: Phaser.AUTO,
+      width: GAME_W,
+      height: GAME_H,
+      backgroundColor: '#0d0d1a',
+      scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+      },
+      scene: [FloppyScene]
+    };
+
+    const game = new Phaser.Game(config);
+
+    document.getElementById('startBtn').addEventListener('click', () => {
+      document.getElementById('startOverlay').classList.add('hidden');
+      const scene = game.scene.getScene('FloppyScene');
+      if (scene) scene.startRun();
+    });
+
+    document.getElementById('restartBtn').addEventListener('click', () => {
+      document.getElementById('gameoverOverlay').classList.add('hidden');
+      const scene = game.scene.getScene('FloppyScene');
+      if (scene) scene.resetGame();
+    });
+  </script>
+</body>
+</html>
